@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+*.wav
+*.m4a
+*.mp3
+*.txt
+!requirements.txt
