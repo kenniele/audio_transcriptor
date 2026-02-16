@@ -85,7 +85,13 @@ def run_diarization(audio_path: str, hf_token: str, num_speakers: int | None = N
         token=hf_token,
     )
 
-    print(f"Модель диаризации загружена за {time.time() - t0:.1f} сек.")
+    # Переносим на GPU если доступен
+    import torch
+    if torch.cuda.is_available():
+        pipeline.to(torch.device("cuda"))
+        print(f"Модель диаризации загружена на GPU за {time.time() - t0:.1f} сек.")
+    else:
+        print(f"Модель диаризации загружена на CPU за {time.time() - t0:.1f} сек.")
     print("Определяю спикеров...")
 
     t0 = time.time()
@@ -98,8 +104,10 @@ def run_diarization(audio_path: str, hf_token: str, num_speakers: int | None = N
     # Удаляем временный wav
     Path(wav_path).unlink(missing_ok=True)
 
+    # Поддержка как старого (Annotation), так и нового (DiarizeOutput) API pyannote
     segments = []
-    for turn, _, speaker in diarization.itertracks(yield_label=True):
+    annotation = getattr(diarization, "speaker_diarization", diarization)
+    for turn, _, speaker in annotation.itertracks(yield_label=True):
         segments.append((turn.start, turn.end, speaker))
 
     speaker_set = {s[2] for s in segments}
@@ -140,9 +148,12 @@ def transcribe(
     speakers: bool = False,
     hf_token: str | None = None,
     num_speakers: int | None = None,
+    fast: bool = False,
 ) -> str:
     """
-    Транскрибирует аудио-файл с максимальной точностью.
+    Транскрибирует аудио-файл.
+    fast=True — быстрый режим (beam=1, без word_timestamps, одна температура).
+    fast=False — максимальная точность (beam=5, best_of=5, word_timestamps).
     """
     audio = Path(audio_path)
     if not audio.exists():
@@ -187,29 +198,55 @@ def transcribe(
     print(f"Модель загружена за {time.time() - t0:.1f} сек.")
     print(f"Транскрибирую: {audio.name} ...")
 
-    # ── Транскрипция с параметрами максимальной точности ──
-    segments, info = model.transcribe(
-        str(audio),
-        language=language,
-        beam_size=5,
-        best_of=5,
-        patience=2.0,
-        temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
-        compression_ratio_threshold=2.4,
-        log_prob_threshold=-1.0,
-        no_speech_threshold=0.6,
-        condition_on_previous_text=True,
-        vad_filter=True,
-        vad_parameters=dict(
-            onset=0.5,
-            offset=0.35,
-            min_speech_duration_ms=250,
-            max_speech_duration_s=float("inf"),
-            min_silence_duration_ms=2000,
-            speech_pad_ms=400,
-        ),
-        word_timestamps=True,
-    )
+    # ── Параметры транскрипции ──
+    if fast:
+        print("⚡ Быстрый режим (скорость > точность)")
+        transcribe_kwargs = dict(
+            language=language,
+            beam_size=1,
+            best_of=1,
+            patience=1.0,
+            temperature=0.0,
+            compression_ratio_threshold=2.4,
+            log_prob_threshold=-1.0,
+            no_speech_threshold=0.6,
+            condition_on_previous_text=True,
+            vad_filter=True,
+            vad_parameters=dict(
+                onset=0.5,
+                offset=0.35,
+                min_speech_duration_ms=250,
+                max_speech_duration_s=float("inf"),
+                min_silence_duration_ms=2000,
+                speech_pad_ms=400,
+            ),
+            word_timestamps=False,
+        )
+    else:
+        print("🎯 Режим максимальной точности")
+        transcribe_kwargs = dict(
+            language=language,
+            beam_size=5,
+            best_of=5,
+            patience=2.0,
+            temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+            compression_ratio_threshold=2.4,
+            log_prob_threshold=-1.0,
+            no_speech_threshold=0.6,
+            condition_on_previous_text=True,
+            vad_filter=True,
+            vad_parameters=dict(
+                onset=0.5,
+                offset=0.35,
+                min_speech_duration_ms=250,
+                max_speech_duration_s=float("inf"),
+                min_silence_duration_ms=2000,
+                speech_pad_ms=400,
+            ),
+            word_timestamps=True,
+        )
+
+    segments, info = model.transcribe(str(audio), **transcribe_kwargs)
 
     detected_lang = info.language
     lang_prob = info.language_probability
@@ -261,8 +298,13 @@ def transcribe(
         elapsed_str = time.strftime("%M:%S", time.gmtime(elapsed))
         print(f"\r[{pct:5.1f}%] {elapsed_str} обработано до {format_timestamp(segment.end)}", end="", flush=True)
 
-        # ── Записываем в файл по мере работы ──
-        out_file.write_text("\n".join(lines), encoding="utf-8")
+        # ── Записываем в файл по мере работы (с retry при блокировке) ──
+        for _attempt in range(5):
+            try:
+                out_file.write_text("\n".join(lines), encoding="utf-8")
+                break
+            except PermissionError:
+                time.sleep(0.5)
 
     print()  # перенос строки после прогресса
 
@@ -340,6 +382,11 @@ def main():
         default=None,
         help="Кол-во спикеров (если известно). Улучшает точность диаризации",
     )
+    parser.add_argument(
+        "-f", "--fast",
+        action="store_true",
+        help="Быстрый режим: beam=1, без word_timestamps (в 3-5x быстрее, чуть менее точно)",
+    )
 
     args = parser.parse_args()
 
@@ -354,6 +401,7 @@ def main():
         speakers=args.speakers,
         hf_token=args.hf_token,
         num_speakers=args.num_speakers,
+        fast=args.fast,
     )
 
 
