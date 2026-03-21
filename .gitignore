@@ -4,5 +4,16 @@ __pycache__/
 *.wav
 *.m4a
 *.mp3
+*.ogg
+*.flac
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.webm
+*.srt
 *.txt
 !requirements.txt
+.claude/
+.idea/
+.DS_STORE

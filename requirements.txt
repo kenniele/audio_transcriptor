@@ -1,8 +1,11 @@
 faster-whisper==1.1.0
+ctranslate2>=4.0
 pyannote.audio>=3.1
 
 # GPU (NVIDIA CUDA) — установить отдельно:
 # pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu126
 #
-# Также требуется ffmpeg (shared-сборка для Windows):
-# https://github.com/BtbN/FFmpeg-Builds/releases
+# Требуется ffmpeg в системе (и для аудио, и для видео):
+# macOS:   brew install ffmpeg
+# Ubuntu:  sudo apt install ffmpeg
+# Windows: https://github.com/BtbN/FFmpeg-Builds/releases
